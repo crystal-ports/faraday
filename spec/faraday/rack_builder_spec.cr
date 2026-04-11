@@ -1,317 +1,108 @@
-# frozen_string_literal: true
+require "../spec_helper"
 
-RSpec.describe Faraday::RackBuilder do
-  # mock handler classes
-  (Handler = Struct.new(:app)).class_eval do
-    def call(env)
-      env[:request_headers]['X-Middleware'] ||= ''
-      env[:request_headers]['X-Middleware'] += ":#{self.class.name.split('::').last}"
-      app.call(env)
+Spectator.describe Faraday::RackBuilder do
+  def build_rack_builder(&block : Faraday::RackBuilder ->)
+    Faraday::RackBuilder.new(&block)
+  end
+
+  subject { build_rack_builder { |_b| } }
+
+  describe "#handlers" do
+    it "starts empty" do
+      expect(subject.handlers).to be_empty
+    end
+
+    it "returns an Array" do
+      expect(subject.handlers).to be_a(Array(Faraday::RackBuilder::HandlerSpec))
     end
   end
 
-  class Apple < Handler
+  describe "#response" do
+    it "adds a handler via :raise_error key" do
+      subject.response :raise_error
+      expect(subject.handlers.size).to eq(1)
+    end
   end
 
-  class Orange < Handler
+  describe "#request" do
+    it "adds a handler via :url_encoded key" do
+      subject.request :url_encoded
+      expect(subject.handlers.size).to eq(1)
+    end
   end
 
-  class Banana < Handler
-  end
-
-  subject { conn.builder }
-  before { Faraday.default_adapter = :test }
-  after { Faraday.default_adapter = nil }
-
-  context 'with default stack' do
-    let(:conn) { Faraday::Connection.new }
-
-    it { expect(subject[0]).to eq(Faraday::Request.lookup_middleware(:url_encoded)) }
-    it { expect(subject.adapter).to eq(Faraday::Adapter.lookup_middleware(Faraday.default_adapter)) }
-  end
-
-  context 'with custom empty block' do
-    let(:conn) { Faraday::Connection.new {} }
-
-    it { expect(subject[0]).to be_nil }
-    it { expect(subject.adapter).to eq(Faraday::Adapter.lookup_middleware(Faraday.default_adapter)) }
-  end
-
-  context 'with custom adapter only' do
-    let(:conn) do
-      Faraday::Connection.new do |builder|
-        builder.adapter :test do |stub|
-          stub.get('/') { |_| [200, {}, ''] }
-        end
-      end
+  describe "#adapter" do
+    it "sets the adapter spec" do
+      subject.adapter :test
+      expect(subject.adapter_spec).not_to be_nil
     end
 
-    it { expect(subject[0]).to be_nil }
-    it { expect(subject.adapter).to eq(Faraday::Adapter.lookup_middleware(:test)) }
+    it "sets :net_http adapter" do
+      subject.adapter :net_http
+      expect(subject.adapter_spec).not_to be_nil
+    end
   end
 
-  context 'with custom handler and adapter' do
-    let(:conn) do
-      Faraday::Connection.new do |builder|
-        builder.use Apple
-        builder.adapter :test do |stub|
-          stub.get('/') { |_| [200, {}, ''] }
-        end
-      end
-    end
+  describe "#lock!" do
+    before_each { subject.adapter :test }
 
-    it 'locks the stack after making a request' do
-      expect(subject.locked?).to be_falsey
-      conn.get('/')
-      expect(subject.locked?).to be_truthy
-      expect { subject.use(Orange) }.to raise_error(Faraday::RackBuilder::StackLocked)
-    end
-
-    it 'dup stack is unlocked' do
-      expect(subject.locked?).to be_falsey
+    it "locks the builder" do
       subject.lock!
-      expect(subject.locked?).to be_truthy
-      dup = subject.dup
-      expect(dup).to eq(subject)
-      expect(dup.locked?).to be_falsey
+      expect(subject.locked?).to be_true
     end
 
-    it 'allows to compare handlers' do
-      expect(subject.handlers.first).to eq(Faraday::RackBuilder::Handler.new(Apple))
+    it "raises StackLocked when adding middleware after lock" do
+      subject.lock!
+      expect { subject.response :raise_error }.to raise_error(Faraday::RackBuilder::StackLocked)
     end
   end
 
-  context 'when having a single handler' do
-    let(:conn) { Faraday::Connection.new {} }
-
-    before { subject.use(Apple) }
-
-    it { expect(subject.handlers).to eq([Apple]) }
-
-    it 'allows use' do
-      subject.use(Orange)
-      expect(subject.handlers).to eq([Apple, Orange])
+  describe "#locked?" do
+    it "is false by default" do
+      expect(subject.locked?).to be_false
     end
 
-    it 'allows insert_before' do
-      subject.insert_before(Apple, Orange)
-      expect(subject.handlers).to eq([Orange, Apple])
-    end
-
-    it 'allows insert_after' do
-      subject.insert_after(Apple, Orange)
-      expect(subject.handlers).to eq([Apple, Orange])
-    end
-
-    it 'raises an error trying to use an unregistered symbol' do
-      expect { subject.use(:apple) }.to raise_error(Faraday::Error) do |err|
-        expect(err.message).to eq(':apple is not registered on Faraday::Middleware')
-      end
+    it "is true after lock!" do
+      subject.adapter :test
+      subject.lock!
+      expect(subject.locked?).to be_true
     end
   end
 
-  context 'when having two handlers' do
-    let(:conn) { Faraday::Connection.new {} }
+  describe "#app" do
+    before_each { subject.adapter :test }
 
-    before do
-      subject.use(Apple)
-      subject.use(Orange)
+    it "returns a Handler" do
+      app = subject.app
+      expect(app).to be_a(Faraday::Handler)
     end
 
-    it 'allows insert_before' do
-      subject.insert_before(Orange, Banana)
-      expect(subject.handlers).to eq([Apple, Banana, Orange])
-    end
-
-    it 'allows insert_after' do
-      subject.insert_after(Apple, Banana)
-      expect(subject.handlers).to eq([Apple, Banana, Orange])
-    end
-
-    it 'allows to swap handlers' do
-      subject.swap(Apple, Banana)
-      expect(subject.handlers).to eq([Banana, Orange])
-    end
-
-    it 'allows to delete a handler' do
-      subject.delete(Apple)
-      expect(subject.handlers).to eq([Orange])
+    it "locks the builder" do
+      subject.app
+      expect(subject.locked?).to be_true
     end
   end
 
-  context 'when adapter is added with named options' do
-    after { Faraday.default_adapter_options = {} }
-    let(:conn) { Faraday::Connection.new {} }
+  describe "#to_app" do
+    before_each { subject.adapter :test }
 
-    let(:cat_adapter) do
-      Class.new(Faraday::Adapter) do
-        attr_accessor :name
-
-        def initialize(app, name:)
-          super(app)
-          @name = name
-        end
-      end
-    end
-
-    let(:cat) { subject.adapter.build }
-
-    it 'adds a handler to construct adapter with named options' do
-      Faraday.default_adapter = cat_adapter
-      Faraday.default_adapter_options = { name: 'Chloe' }
-      expect { cat }.to_not output(
-        /warning: Using the last argument as keyword parameters is deprecated/
-      ).to_stderr
-      expect(cat.name).to eq 'Chloe'
+    it "returns a Handler" do
+      expect(subject.to_app).to be_a(Faraday::Handler)
     end
   end
 
-  context 'when middleware is added with named arguments' do
-    let(:conn) { Faraday::Connection.new {} }
-
-    let(:dog_middleware) do
-      Class.new(Faraday::Middleware) do
-        attr_accessor :name
-
-        def initialize(app, name:)
-          super(app)
-          @name = name
-        end
-      end
-    end
-    let(:dog) do
-      subject.handlers.find { |handler| handler == dog_middleware }.build
-    end
-
-    it 'adds a handler to construct middleware with options passed to use' do
-      subject.use dog_middleware, name: 'Rex'
-      expect { dog }.to_not output(
-        /warning: Using the last argument as keyword parameters is deprecated/
-      ).to_stderr
-      expect(dog.name).to eq('Rex')
+  describe "multiple middleware" do
+    it "stacks middleware in order" do
+      subject.request :url_encoded
+      subject.response :raise_error
+      expect(subject.handlers.size).to eq(2)
     end
   end
 
-  context 'when a middleware is added with named arguments' do
-    let(:conn) { Faraday::Connection.new {} }
-
-    let(:cat_request) do
-      Class.new(Faraday::Middleware) do
-        attr_accessor :name
-
-        def initialize(app, name:)
-          super(app)
-          @name = name
-        end
-      end
-    end
-    let(:cat) do
-      subject.handlers.find { |handler| handler == cat_request }.build
-    end
-
-    it 'adds a handler to construct request adapter with options passed to request' do
-      Faraday::Request.register_middleware cat_request: cat_request
-      subject.request :cat_request, name: 'Felix'
-      expect { cat }.to_not output(
-        /warning: Using the last argument as keyword parameters is deprecated/
-      ).to_stderr
-      expect(cat.name).to eq('Felix')
-    end
-  end
-
-  context 'when a middleware is added with named arguments' do
-    let(:conn) { Faraday::Connection.new {} }
-
-    let(:fish_response) do
-      Class.new(Faraday::Middleware) do
-        attr_accessor :name
-
-        def initialize(app, name:)
-          super(app)
-          @name = name
-        end
-      end
-    end
-    let(:fish) do
-      subject.handlers.find { |handler| handler == fish_response }.build
-    end
-
-    it 'adds a handler to construct response adapter with options passed to response' do
-      Faraday::Response.register_middleware fish_response: fish_response
-      subject.response :fish_response, name: 'Bubbles'
-      expect { fish }.to_not output(
-        /warning: Using the last argument as keyword parameters is deprecated/
-      ).to_stderr
-      expect(fish.name).to eq('Bubbles')
-    end
-  end
-
-  context 'when a plain adapter is added with named arguments' do
-    let(:conn) { Faraday::Connection.new {} }
-
-    let(:rabbit_adapter) do
-      Class.new(Faraday::Adapter) do
-        attr_accessor :name
-
-        def initialize(app, name:)
-          super(app)
-          @name = name
-        end
-      end
-    end
-    let(:rabbit) do
-      subject.adapter.build
-    end
-
-    it 'adds a handler to construct adapter with options passed to adapter' do
-      Faraday::Adapter.register_middleware rabbit_adapter: rabbit_adapter
-      subject.adapter :rabbit_adapter, name: 'Thumper'
-      expect { rabbit }.to_not output(
-        /warning: Using the last argument as keyword parameters is deprecated/
-      ).to_stderr
-      expect(rabbit.name).to eq('Thumper')
-    end
-  end
-
-  context 'when handlers are directly added or updated' do
-    let(:conn) { Faraday::Connection.new {} }
-
-    let(:rock_handler) do
-      Class.new do
-        attr_accessor :name
-
-        def initialize(_app, name:)
-          @name = name
-        end
-      end
-    end
-    let(:rock) do
-      subject.handlers.find { |handler| handler == rock_handler }.build
-    end
-
-    it 'adds a handler to construct adapter with options passed to insert' do
-      subject.insert 0, rock_handler, name: 'Stony'
-      expect { rock }.to_not output(
-        /warning: Using the last argument as keyword parameters is deprecated/
-      ).to_stderr
-      expect(rock.name).to eq('Stony')
-    end
-
-    it 'adds a handler with options passed to insert_after' do
-      subject.insert_after 0, rock_handler, name: 'Rocky'
-      expect { rock }.to_not output(
-        /warning: Using the last argument as keyword parameters is deprecated/
-      ).to_stderr
-      expect(rock.name).to eq('Rocky')
-    end
-
-    it 'adds a handler with options passed to swap' do
-      subject.insert 0, rock_handler, name: 'Flint'
-      subject.swap 0, rock_handler, name: 'Chert'
-      expect { rock }.to_not output(
-        /warning: Using the last argument as keyword parameters is deprecated/
-      ).to_stderr
-      expect(rock.name).to eq('Chert')
-    end
+  describe "insert_before / insert_after / swap / delete" do
+    pending "insert_before is not implemented in Crystal RackBuilder"
+    pending "insert_after is not implemented in Crystal RackBuilder"
+    pending "swap is not implemented in Crystal RackBuilder"
+    pending "delete is not implemented in Crystal RackBuilder"
   end
 end

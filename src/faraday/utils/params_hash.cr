@@ -1,60 +1,56 @@
-# frozen_string_literal: true
-
 module Faraday
   module Utils
-    # A hash with stringified keys.
-    class ParamsHash < Hash
-      def [](key)
-        super(convert_key(key))
+    # A Hash with stringified keys that handles URL query parameters.
+    class ParamsHash < Hash(String, String)
+      def []=(key, value : String)
+        super(key.to_s, value)
       end
 
-      def []=(key, value)
-        super(convert_key(key), value)
+      def [](key) : String
+        super(key.to_s)
+      end
+
+      def []?(key) : String?
+        super(key.to_s)
       end
 
       def delete(key)
-        super(convert_key(key))
+        super(key.to_s)
       end
 
-      def include?(key)
-        super(convert_key(key))
+      def has_key?(key) : Bool
+        super(key.to_s)
       end
 
-      alias has_key? include?
-      alias member? include?
-      alias key? include?
-
-      def update(params)
-        params.each do |key, value|
-          self[key] = value
-        end
+      def update(other : Hash)
+        other.each { |k, v| self[k.to_s] = v.to_s }
         self
       end
-      alias merge! update
 
-      def merge(params)
-        dup.update(params)
+      def merge(other : Hash) : ParamsHash
+        dup.update(other)
       end
 
-      def replace(other)
+      def replace(other : Hash)
         clear
         update(other)
       end
 
-      def merge_query(query, encoder = nil)
+      def dup : ParamsHash
+        copy = ParamsHash.new
+        each { |k, v| copy[k] = v }
+        copy
+      end
+
+      def merge_query(query : String?, encoder = nil) : ParamsHash
         return self unless query && !query.empty?
-
-        update((encoder || Utils.default_params_encoder).decode(query))
+        decoded = (encoder || FlatParamsEncoder).decode(query)
+        update(decoded)
+        self
       end
 
-      def to_query(encoder = nil)
-        (encoder || Utils.default_params_encoder).encode(self)
-      end
-
-      private
-
-      def convert_key(key)
-        key.to_s
+      def to_query(encoder = nil) : String
+        (encoder || FlatParamsEncoder).encode(self)
       end
     end
   end

@@ -1,76 +1,204 @@
-# frozen_string_literal: true
+require "../../spec_helper"
 
-RSpec.describe Faraday::Env do
-  subject(:env) { described_class.new }
+Spectator.describe Faraday::Env do
+  subject { Faraday::Env.new }
 
-  it 'allows to access members' do
-    expect(env.method).to be_nil
-    env.method = :get
-    expect(env.method).to eq(:get)
+  describe "#method" do
+    it "defaults to :get" do
+      expect(subject.method).to eq(:get)
+    end
+
+    it "can be changed" do
+      subject.method = :post
+      expect(subject.method).to eq(:post)
+    end
   end
 
-  it 'allows to access symbol non members' do
-    expect(env[:custom]).to be_nil
-    env[:custom] = :boom
-    expect(env[:custom]).to eq(:boom)
+  describe "#request_headers" do
+    it "is an HTTP::Headers" do
+      expect(subject.request_headers).to be_a(HTTP::Headers)
+    end
+
+    it "allows setting headers" do
+      subject.request_headers["Content-Type"] = "text/plain"
+      expect(subject.request_headers["Content-Type"]).to eq("text/plain")
+    end
   end
 
-  it 'allows to access string non members' do
-    expect(env['custom']).to be_nil
-    env['custom'] = :boom
-    expect(env['custom']).to eq(:boom)
+  describe "#url" do
+    it "defaults to nil" do
+      expect(subject.url).to be_nil
+    end
+
+    it "can be set to a URI" do
+      subject.url = URI.parse("http://example.com")
+      expect(subject.url.not_nil!.host).to eq("example.com")
+    end
   end
 
-  it 'ignores false when fetching' do
-    ssl = Faraday::SSLOptions.new
-    ssl.verify = false
-    expect(ssl.fetch(:verify, true)).to be_falsey
+  describe "#status" do
+    it "defaults to nil" do
+      expect(subject.status).to be_nil
+    end
+
+    it "can be set" do
+      subject.status = 200
+      expect(subject.status).to eq(200)
+    end
   end
 
-  it 'handle verify_hostname when fetching' do
-    ssl = Faraday::SSLOptions.new
-    ssl.verify_hostname = true
-    expect(ssl.fetch(:verify_hostname, false)).to be_truthy
+  describe "#reason_phrase" do
+    it "defaults to nil" do
+      expect(subject.reason_phrase).to be_nil
+    end
+
+    it "can be set" do
+      subject.reason_phrase = "OK"
+      expect(subject.reason_phrase).to eq("OK")
+    end
   end
 
-  it 'retains custom members' do
-    env[:foo] = 'custom 1'
-    env[:bar] = :custom2
-    env2 = Faraday::Env.from(env)
-    env2[:baz] = 'custom 3'
+  describe "#request_body and #response_body" do
+    it "request_body defaults to nil" do
+      expect(subject.request_body).to be_nil
+    end
 
-    expect(env2[:foo]).to eq('custom 1')
-    expect(env2[:bar]).to eq(:custom2)
-    expect(env[:baz]).to be_nil
+    it "response_body defaults to nil" do
+      expect(subject.response_body).to be_nil
+    end
+
+    it "allows setting request_body" do
+      subject.request_body = "req"
+      expect(subject.request_body).to eq("req")
+    end
+
+    it "allows setting response_body" do
+      subject.response_body = "resp"
+      expect(subject.response_body).to eq("resp")
+    end
   end
 
-  describe '#body' do
-    subject(:env) { described_class.from(body: { foo: 'bar' }) }
+  describe "#body" do
+    context "when status is set (response phase)" do
+      before_each {
+        subject.status = 200
+        subject.response_body = "response body"
+      }
 
-    context 'when response is not finished yet' do
-      it 'returns the request body' do
-        expect(env.body).to eq(foo: 'bar')
+      it "returns response_body" do
+        expect(subject.body).to eq("response body")
       end
     end
 
-    context 'when response is finished' do
-      before do
-        env.status = 200
-        env.body = { bar: 'foo' }
-        env.response = Faraday::Response.new(env)
-      end
+    context "when no status is set (request phase)" do
+      before_each {
+        subject.request_body = "request body"
+      }
 
-      it 'returns the response body' do
-        expect(env.body).to eq(bar: 'foo')
+      it "returns request_body" do
+        expect(subject.body).to eq("request body")
       end
+    end
 
-      it 'allows to access request_body' do
-        expect(env.request_body).to eq(foo: 'bar')
+    context "when neither body is set" do
+      it "returns nil" do
+        expect(subject.body).to be_nil
       end
+    end
+  end
 
-      it 'allows to access response_body' do
-        expect(env.response_body).to eq(bar: 'foo')
-      end
+  describe "#success?" do
+    it "returns true for 200" do
+      subject.status = 200
+      expect(subject.success?).to be_true
+    end
+
+    it "returns true for 201" do
+      subject.status = 201
+      expect(subject.success?).to be_true
+    end
+
+    it "returns true for 299" do
+      subject.status = 299
+      expect(subject.success?).to be_true
+    end
+
+    it "returns false for 400" do
+      subject.status = 400
+      expect(subject.success?).to be_false
+    end
+
+    it "returns false for 500" do
+      subject.status = 500
+      expect(subject.success?).to be_false
+    end
+
+    it "returns false for 301" do
+      subject.status = 301
+      expect(subject.success?).to be_false
+    end
+  end
+
+  describe "#custom_members" do
+    it "is a Hash(Symbol, String)" do
+      expect(subject.custom_members).to be_a(Hash(Symbol, String))
+    end
+
+    it "starts empty" do
+      expect(subject.custom_members).to be_empty
+    end
+
+    it "allows storing custom data" do
+      subject.custom_members[:my_key] = "my_value"
+      expect(subject.custom_members[:my_key]).to eq("my_value")
+    end
+  end
+
+  describe "#needs_body?" do
+    it "returns a Bool" do
+      expect(subject.needs_body?).to be_a(Bool)
+    end
+  end
+
+  describe "#parse_body?" do
+    it "returns a Bool" do
+      expect(subject.parse_body?).to be_a(Bool)
+    end
+  end
+
+  describe "#parallel?" do
+    it "returns false by default" do
+      expect(subject.parallel?).to be_false
+    end
+  end
+
+  describe "#stream_response?" do
+    it "returns false by default" do
+      expect(subject.stream_response?).to be_false
+    end
+  end
+
+  describe "#request" do
+    it "returns a RequestOptions" do
+      expect(subject.request).to be_a(Faraday::RequestOptions)
+    end
+  end
+
+  describe "#ssl" do
+    it "returns an SSLOptions" do
+      expect(subject.ssl).to be_a(Faraday::SSLOptions)
+    end
+  end
+
+  describe "Env.from class method" do
+    pending "Env.from is a Ruby-specific constructor that is not ported to Crystal" do
+      # Ruby: Faraday::Env.from(method: :get, status: 200, ...)
+      # Crystal: use Faraday::Env.new and set properties
+    end
+  end
+
+  describe "arbitrary key access (env[:key])" do
+    pending "Ruby Env supports env[:custom_key] for arbitrary access; Crystal uses custom_members hash" do
     end
   end
 end

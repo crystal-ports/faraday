@@ -6,9 +6,9 @@ These guidelines ensure all AI agents (Copilot, Claude, Cursor, etc.) contribute
 - Suggest updates whenever conventions change or new patterns emerge, keeping this document up to date.
 
 ## Code Style & Structure
-- **Do not include basic Ruby or RSpec tips**—assume agents know the language, RuboCop, and test basics.
-- Use the established Faraday directory structure (`lib/faraday/` for main code, `spec/faraday/` for tests).
-- Classes and files must use descriptive, conventional Ruby names (e.g., `Faraday::MyAdapter` in `lib/faraday/my_adapter.rb`).
+- **Do not include basic Crystal or Spectator tips**—assume agents know the language and test basics.
+- Use the established Faraday directory structure (`src/faraday/` for main code, `spec/` for tests).
+- Classes and files must use descriptive, conventional Crystal names (e.g., `Faraday::MyAdapter` in `src/faraday/my_adapter.cr`).
 
 ## Middleware Implementation
 - All middleware must inherit from `Faraday::Middleware`.
@@ -21,16 +21,15 @@ These guidelines ensure all AI agents (Copilot, Claude, Cursor, etc.) contribute
 - Adapters must extend `Faraday::MiddlewareRegistry` and register themselves.
 - If providing parallel support, include the `Parallelism` module and set `supports_parallel = true`.
 - Implement required methods (`build_connection`, `close`, etc.) as seen in existing adapters.
-- Keep each adapter in its own file under `lib/faraday/adapter/`.
+- Keep each adapter in its own file under `src/faraday/adapter/`.
 
 ## Testing
-- All code must be tested with RSpec. Use shared examples for adapters/middleware where applicable (see `spec/support`).
-- When testing middleware, use doubles for `app` and verify correct invocation of hooks.
-- Use HTTP test helpers and stubs, not real network calls.
+- All code must be tested with Spectator. Use shared examples for adapters/middleware where applicable.
+- When testing middleware, use the test adapter (`Faraday::Adapter::Test`) and stub requests, not real network calls.
 - Follow the project's test organization and naming conventions.
 
 ## Documentation
-- All new public APIs must be documented with YARD-style comments.
+- All new public APIs must be documented with Crystal doc comments (`# ...` above the method/class).
 - Update README, changelog, or docs/ as needed for significant features or user-facing changes.
 - Document any new middleware or adapter in the docs folder if it is a user-facing extension.
 

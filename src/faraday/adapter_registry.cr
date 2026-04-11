@@ -1,30 +1,16 @@
-# frozen_string_literal: true
-
-require 'monitor'
-
 module Faraday
-  # AdapterRegistry registers adapter class names so they can be looked up by a
-  # String or Symbol name.
+  # AdapterRegistry registers and looks up adapter classes by name.
   class AdapterRegistry
-    def initialize
-      @lock = Monitor.new
-      @constants = {}
+    @@lock = Mutex.new
+    @@adapters = {} of Symbol => Handler.class
+
+    def self.register(key : Symbol, klass : Handler.class)
+      @@lock.synchronize { @@adapters[key] = klass }
     end
 
-    def get(name)
-      klass = @lock.synchronize do
-        @constants[name]
-      end
-      return klass if klass
-
-      Object.const_get(name).tap { |c| set(c, name) }
-    end
-
-    def set(klass, name = nil)
-      name ||= klass.to_s
-      @lock.synchronize do
-        @constants[name] = klass
-      end
+    def self.lookup(key : Symbol) : Handler.class
+      @@lock.synchronize { @@adapters[key]? } ||
+        raise ArgumentError.new("Unknown adapter: #{key.inspect}")
     end
   end
 end

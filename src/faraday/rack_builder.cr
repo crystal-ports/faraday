@@ -1,248 +1,244 @@
-# frozen_string_literal: true
-
-require 'faraday/adapter_registry'
-
 module Faraday
-  # A Builder that processes requests into responses by passing through an inner
-  # middleware stack (heavily inspired by Rack).
-  #
-  # @example
-  #   Faraday::Connection.new(url: 'http://httpbingo.org') do |builder|
-  #     builder.request  :url_encoded  # Faraday::Request::UrlEncoded
-  #     builder.adapter  :net_http     # Faraday::Adapter::NetHttp
-  #   end
+  # RackBuilder builds the middleware stack (Rack-inspired).
   class RackBuilder
-    # Used to detect missing arguments
-    NO_ARGUMENT = Object.new
+    LOCK_ERR             = "can't modify middleware stack after making a request"
+    MISSING_ADAPTER_ERROR = "An adapter must be set on the Faraday connection.\n" \
+                            "Set Faraday.default_adapter or use the builder:\n" \
+                            "  conn = Faraday.new { |f| f.adapter :net_http }"
 
-    LOCK_ERR = "can't modify middleware stack after making a request"
-    MISSING_ADAPTER_ERROR = "An attempt to run a request with a Faraday::Connection without adapter has been made.\n" \
-                            "Please set Faraday.default_adapter or provide one when initializing the connection.\n" \
-                            'For more info, check https://lostisland.github.io/faraday/usage/.'
+    class StackLocked < Exception; end
 
-    attr_accessor :handlers
+    # Alias so specs can reference Faraday::RackBuilder::HandlerSpec
+    alias HandlerSpec = Faraday::HandlerSpec
 
-    # Error raised when trying to modify the stack after calling `lock!`
-    class StackLocked < RuntimeError; end
+    getter handlers : Array(HandlerSpec)
+    getter adapter_spec : AdapterSpec?
 
-    # borrowed from ActiveSupport::Dependencies::Reference &
-    # ActionDispatch::MiddlewareStack::Middleware
-    class Handler
-      REGISTRY = Faraday::AdapterRegistry.new
+    @app : Handler?
 
-      attr_reader :name
-
-      def initialize(klass, *args, **kwargs, &block)
-        @name = klass.to_s
-        REGISTRY.set(klass) if klass.respond_to?(:name)
-        @args = args
-        @kwargs = kwargs
-        @block = block
-      end
-
-      def klass
-        REGISTRY.get(@name)
-      end
-
-      def inspect
-        @name
-      end
-
-      def ==(other)
-        if other.is_a? Handler
-          name == other.name
-        elsif other.respond_to? :name
-          klass == other
-        else
-          @name == other.to_s
-        end
-      end
-
-      def build(app = nil)
-        klass.new(app, *@args, **@kwargs, &@block)
-      end
+    def initialize
+      @handlers = [] of HandlerSpec
+      @adapter_spec = nil
+      @locked = false
+      @app = nil
+      set_default_adapter
     end
 
-    def initialize(&block)
-      @adapter = nil
-      @handlers = []
-      build(&block)
+    def initialize(&block : RackBuilder ->)
+      @handlers = [] of HandlerSpec
+      @adapter_spec = nil
+      @locked = false
+      @app = nil
+      block.call(self)
+      set_default_adapter unless @adapter_spec
     end
 
-    def initialize_dup(original)
-      super
-      @adapter = original.adapter
-      @handlers = original.handlers.dup
+    # Add a middleware class to the stack.
+    macro use(klass)
+      use_handler({{klass}}, {{klass}}.name, ->(app : Faraday::Handler) { {{klass}}.new(app).as(Faraday::Handler) })
     end
 
-    def build
+    def use_handler(klass, name : String, factory : Handler -> Handler)
       raise_if_locked
-      block_given? ? yield(self) : request(:url_encoded)
-      adapter(Faraday.default_adapter, **Faraday.default_adapter_options) unless @adapter
+      @handlers << HandlerSpec.new(name, factory)
     end
 
-    def [](idx)
-      @handlers[idx]
+    # Add middleware by class directly (for runtime use).
+    def use_class(klass : Request::UrlEncoded.class)
+      raise_if_locked
+      @handlers << HandlerSpec.new("Faraday::Request::UrlEncoded",
+        ->(app : Handler) { Request::UrlEncoded.new(app).as(Handler) })
     end
 
-    # Locks the middleware stack to ensure no further modifications are made.
-    def lock!
-      @handlers.freeze
+    def use_class(klass : Request::Json.class)
+      raise_if_locked
+      @handlers << HandlerSpec.new("Faraday::Request::Json",
+        ->(app : Handler) { Request::Json.new(app).as(Handler) })
     end
 
-    def locked?
-      @handlers.frozen?
+    def use_class(klass : Response::RaiseError.class)
+      raise_if_locked
+      @handlers << HandlerSpec.new("Faraday::Response::RaiseError",
+        ->(app : Handler) { Response::RaiseError.new(app).as(Handler) })
     end
 
-    def use(klass, ...)
-      if klass.is_a? Symbol
-        use_symbol(Faraday::Middleware, klass, ...)
+    def use_class(klass : Response::Json.class)
+      raise_if_locked
+      @handlers << HandlerSpec.new("Faraday::Response::Json",
+        ->(app : Handler) { Response::Json.new(app).as(Handler) })
+    end
+
+    # Add middleware by symbol key.
+    def request(key : Symbol)
+      raise_if_locked
+      case key
+      when :url_encoded
+        use_class(Request::UrlEncoded)
+      when :json
+        use_class(Request::Json)
       else
-        raise_if_locked
-        raise_if_adapter(klass)
-        @handlers << self.class::Handler.new(klass, ...)
+        raise Faraday::Error.new("Unknown request middleware: #{key.inspect}")
       end
     end
 
-    def request(key, ...)
-      use_symbol(Faraday::Request, key, ...)
-    end
-
-    def response(...)
-      use_symbol(Faraday::Response, ...)
-    end
-
-    def adapter(klass = NO_ARGUMENT, *args, **kwargs, &block)
-      return @adapter if klass == NO_ARGUMENT || klass.nil?
-
-      klass = Faraday::Adapter.lookup_middleware(klass) if klass.is_a?(Symbol)
-      @adapter = self.class::Handler.new(klass, *args, **kwargs, &block)
-    end
-
-    ## methods to push onto the various positions in the stack:
-
-    def insert(index, ...)
+    # :authorization with symbol type (:basic requires user+pass, :token requires token)
+    def request(key : Symbol, auth_type : Symbol, user : String, pass : String)
       raise_if_locked
-      index = assert_index(index)
-      handler = self.class::Handler.new(...)
-      @handlers.insert(index, handler)
+      case key
+      when :authorization
+        case auth_type
+        when :basic
+          value = Utils.basic_header_from(user, pass)
+          @handlers << HandlerSpec.new("Faraday::Request::Authorization",
+            ->(app : Handler) { Request::Authorization.new(app, value).as(Handler) })
+        when :token
+          @handlers << HandlerSpec.new("Faraday::Request::Authorization",
+            ->(app : Handler) { Request::Authorization.new(app, "Token #{user}").as(Handler) })
+        else
+          raise Faraday::Error.new("Unknown authorization type: #{auth_type}")
+        end
+      else
+        raise Faraday::Error.new("Unknown request middleware: #{key.inspect}")
+      end
     end
 
-    alias insert_before insert
-
-    def insert_after(index, ...)
-      index = assert_index(index)
-      insert(index + 1, ...)
-    end
-
-    def swap(index, ...)
+    def request(key : Symbol, auth_type : Symbol, token : String)
       raise_if_locked
-      index = assert_index(index)
-      @handlers.delete_at(index)
-      insert(index, ...)
+      case key
+      when :authorization
+        case auth_type
+        when :token
+          @handlers << HandlerSpec.new("Faraday::Request::Authorization",
+            ->(app : Handler) { Request::Authorization.new(app, "Token #{token}").as(Handler) })
+        else
+          raise Faraday::Error.new("Unknown authorization type: #{auth_type}")
+        end
+      else
+        raise Faraday::Error.new("Unknown request middleware: #{key.inspect}")
+      end
     end
 
-    def delete(handler)
+    def request(key : Symbol, auth_type : String, token : String)
       raise_if_locked
-      @handlers.delete(handler)
+      case key
+      when :authorization
+        @handlers << HandlerSpec.new("Faraday::Request::Authorization",
+          ->(app : Handler) { Request::Authorization.new(app, "#{auth_type} #{token}").as(Handler) })
+      else
+        raise Faraday::Error.new("Unknown request middleware: #{key.inspect}")
+      end
     end
 
-    # Processes a Request into a Response by passing it through this Builder's
-    # middleware stack.
-    #
-    # @param connection [Faraday::Connection]
-    # @param request [Faraday::Request]
-    #
-    # @return [Faraday::Response]
-    def build_response(connection, request)
-      app.call(build_env(connection, request))
+    def response(key : Symbol, *, allowed_statuses : Array(Int32) = [] of Int32)
+      raise_if_locked
+      case key
+      when :raise_error
+        statuses = allowed_statuses
+        @handlers << HandlerSpec.new("Faraday::Response::RaiseError",
+          ->(app : Handler) { Response::RaiseError.new(app, statuses).as(Handler) })
+      when :json
+        use_class(Response::Json)
+      else
+        raise Faraday::Error.new("Unknown response middleware: #{key.inspect}")
+      end
     end
 
-    # The "rack app" wrapped in middleware. All requests are sent here.
-    #
-    # The builder is responsible for creating the app object. After this,
-    # the builder gets locked to ensure no further modifications are made
-    # to the middleware stack.
-    #
-    # Returns an object that responds to `call` and returns a Response.
-    def app
+    # Set the adapter by symbol (no stubs).
+    def adapter(key : Symbol)
+      raise_if_locked
+      case key
+      when :net_http
+        @adapter_spec = AdapterSpec.new("Faraday::Adapter::NetHttp",
+          -> { Adapter::NetHttp.new.as(Handler) })
+      when :test
+        @adapter_spec = AdapterSpec.new("Faraday::Adapter::Test",
+          -> { Adapter::Test.new.as(Handler) })
+      else
+        raise ArgumentError.new("Unknown adapter: #{key.inspect}")
+      end
+    end
+
+    # Set the adapter by symbol with stubs (for Test adapter).
+    def adapter(key : Symbol, stubs : Adapter::Test::Stubs)
+      raise_if_locked
+      case key
+      when :test
+        @adapter_spec = AdapterSpec.new("Faraday::Adapter::Test",
+          -> { Adapter::Test.new(nil, stubs).as(Handler) })
+      else
+        raise ArgumentError.new("Adapter #{key.inspect} does not accept stubs")
+      end
+    end
+
+    # Set the adapter by symbol with keyword opts (legacy compat).
+    def adapter(key : Symbol, **opts)
+      adapter(key)
+    end
+
+    # Set the adapter by class.
+    def adapter(klass : Adapter::NetHttp.class, **opts)
+      @adapter_spec = AdapterSpec.new("Faraday::Adapter::NetHttp",
+        -> { Adapter::NetHttp.new.as(Handler) })
+    end
+
+    # Set the adapter from a pre-built instance (useful for tests and custom adapters).
+    def adapter(instance : Adapter)
+      @adapter_spec = AdapterSpec.new(instance.class.name,
+        -> { instance.as(Handler) })
+    end
+
+    # Lock the stack, preventing further modifications.
+    def lock!
+      @locked = true
+    end
+
+    def locked? : Bool
+      @locked
+    end
+
+    # Get or build the app (locks the stack on first call).
+    def app : Handler
       @app ||= begin
         lock!
-        ensure_adapter!
+        raise StackLocked.new(MISSING_ADAPTER_ERROR) unless @adapter_spec
         to_app
       end
     end
 
-    def to_app
-      # last added handler is the deepest and thus closest to the inner app
-      # adapter is always the last one
-      @handlers.reverse.inject(@adapter.build) do |app, handler|
-        handler.build(app)
-      end
+    # Build the middleware chain and return the outermost handler.
+    def to_app : Handler
+      base = @adapter_spec.not_nil!.build
+      @handlers.reverse.reduce(base) { |inner, spec| spec.build(inner) }
     end
 
-    def ==(other)
-      other.is_a?(self.class) &&
-        @handlers == other.handlers &&
-        @adapter == other.adapter
+    # Build a Faraday::Response from a connection and request.
+    def build_response(connection : Connection, request : Request) : Response
+      env = build_env(connection, request)
+      app.call(env)
     end
 
-    # ENV Keys
-    # :http_method - a symbolized request HTTP method (:get, :post)
-    # :body   - the request body that will eventually be converted to a string.
-    # :url    - URI instance for the current request.
-    # :status           - HTTP response status code
-    # :request_headers  - hash of HTTP Headers to be sent to the server
-    # :response_headers - Hash of HTTP headers from the server
-    # :parallel_manager - sent if the connection is in parallel mode
-    # :request - Hash of options for configuring the request.
-    #   :timeout      - open/read timeout Integer in seconds
-    #   :open_timeout - read timeout Integer in seconds
-    #   :proxy        - Hash of proxy options
-    #     :uri        - Proxy Server URI
-    #     :user       - Proxy server username
-    #     :password   - Proxy server password
-    # :ssl - Hash of options for configuring SSL requests.
-    def build_env(connection, request)
+    def build_env(connection : Connection, request : Request) : Env
       exclusive_url = connection.build_exclusive_url(
-        request.path, request.params,
-        request.options.params_encoder
+        request.path, request.params, request.options
       )
 
-      Env.new(request.http_method, request.body, exclusive_url,
-              request.options, request.headers, connection.ssl,
-              connection.parallel_manager)
+      env = Env.new(
+        method: request.http_method,
+        request_body: request.body,
+        url: exclusive_url,
+        request: request.options,
+        request_headers: request.headers,
+        ssl: connection.ssl,
+      )
+      env
     end
 
-    private
-
-    def raise_if_locked
-      raise StackLocked, LOCK_ERR if locked?
+    private def raise_if_locked
+      raise StackLocked.new(LOCK_ERR) if locked?
     end
 
-    def raise_if_adapter(klass)
-      return unless klass <= Faraday::Adapter
-
-      raise 'Adapter should be set using the `adapter` method, not `use`'
-    end
-
-    def ensure_adapter!
-      raise MISSING_ADAPTER_ERROR unless @adapter
-    end
-
-    def adapter_set?
-      !@adapter.nil?
-    end
-
-    def use_symbol(mod, key, ...)
-      use(mod.lookup_middleware(key), ...)
-    end
-
-    def assert_index(index)
-      idx = index.is_a?(Integer) ? index : @handlers.index(index)
-      raise "No such handler: #{index.inspect}" unless idx
-
-      idx
+    private def set_default_adapter
+      adapter(Faraday.default_adapter)
     end
   end
 end

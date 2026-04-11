@@ -1,175 +1,151 @@
-# frozen_string_literal: true
+require "../spec_helper"
 
-RSpec.describe Faraday::Error do
-  describe '.initialize' do
-    subject { described_class.new(exception, response) }
-    let(:response) { nil }
+Spectator.describe Faraday::Error do
+  describe ".new with string message" do
+    subject { Faraday::Error.new("oops") }
 
-    context 'with exception only' do
-      let(:exception) { RuntimeError.new('test') }
-
-      it { expect(subject.wrapped_exception).to eq(exception) }
-      it { expect(subject.response).to be_nil }
-      it { expect(subject.message).to eq(exception.message) }
-      it { expect(subject.backtrace).to eq(exception.backtrace) }
-      it { expect(subject.inspect).to eq('#<Faraday::Error wrapped=#<RuntimeError: test>>') }
-      it { expect(subject.response_status).to be_nil }
-      it { expect(subject.response_headers).to be_nil }
-      it { expect(subject.response_body).to be_nil }
+    it "sets the message" do
+      expect(subject.message).to eq("oops")
     end
 
-    context 'with response hash' do
-      let(:exception) { { status: 400 } }
-
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to eq(exception) }
-      it { expect(subject.message).to eq('the server responded with status 400 - method and url are not available due to include_request: false on Faraday::Response::RaiseError middleware') }
-      if RUBY_VERSION >= '3.4'
-        it { expect(subject.inspect).to eq('#<Faraday::Error response={status: 400}>') }
-      else
-        it { expect(subject.inspect).to eq('#<Faraday::Error response={:status=>400}>') }
-      end
-      it { expect(subject.response_status).to eq(400) }
-      it { expect(subject.response_headers).to be_nil }
-      it { expect(subject.response_body).to be_nil }
+    it "has no wrapped exception" do
+      expect(subject.wrapped_exception).to be_nil
     end
 
-    context 'with string' do
-      let(:exception) { 'custom message' }
-
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to be_nil }
-      it { expect(subject.message).to eq('custom message') }
-      it { expect(subject.inspect).to eq('#<Faraday::Error #<Faraday::Error: custom message>>') }
-      it { expect(subject.response_status).to be_nil }
-      it { expect(subject.response_headers).to be_nil }
-      it { expect(subject.response_body).to be_nil }
+    it "has no response" do
+      expect(subject.response).to be_nil
     end
 
-    context 'with anything else #to_s' do
-      let(:exception) { %w[error1 error2] }
-
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to be_nil }
-      it { expect(subject.message).to eq('["error1", "error2"]') }
-      it { expect(subject.inspect).to eq('#<Faraday::Error #<Faraday::Error: ["error1", "error2"]>>') }
-      it { expect(subject.response_status).to be_nil }
-      it { expect(subject.response_headers).to be_nil }
-      it { expect(subject.response_body).to be_nil }
+    it "has nil response_status" do
+      expect(subject.response_status).to be_nil
     end
 
-    context 'with exception string and response hash' do
-      let(:exception) { 'custom message' }
-      let(:response) { { status: 400 } }
-
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to eq(response) }
-      it { expect(subject.message).to eq('custom message') }
-      if RUBY_VERSION >= '3.4'
-        it { expect(subject.inspect).to eq('#<Faraday::Error response={status: 400}>') }
-      else
-        it { expect(subject.inspect).to eq('#<Faraday::Error response={:status=>400}>') }
-      end
-      it { expect(subject.response_status).to eq(400) }
-      it { expect(subject.response_headers).to be_nil }
-      it { expect(subject.response_body).to be_nil }
+    it "has nil response_headers" do
+      expect(subject.response_headers).to be_nil
     end
 
-    context 'with exception and response object' do
-      let(:exception) { RuntimeError.new('test') }
-      let(:body) { { test: 'test' } }
-      let(:headers) { { 'Content-Type' => 'application/json' } }
-      let(:response) { Faraday::Response.new(status: 400, response_headers: headers, response_body: body) }
+    it "has nil response_body" do
+      expect(subject.response_body).to be_nil
+    end
+  end
 
-      it { expect(subject.wrapped_exception).to eq(exception) }
-      it { expect(subject.response).to eq(response) }
-      it { expect(subject.message).to eq(exception.message) }
-      it { expect(subject.backtrace).to eq(exception.backtrace) }
-      it { expect(subject.response_status).to eq(400) }
-      it { expect(subject.response_headers).to eq(headers) }
-      it { expect(subject.response_body).to eq(body) }
+  describe ".new with default message" do
+    subject { Faraday::Error.new }
+
+    it "can be instantiated without arguments" do
+      expect(subject).to be_a(Faraday::Error)
     end
 
-    context 'with hash missing status key' do
-      let(:exception) { { body: 'error body' } }
+    it "has no wrapped exception" do
+      expect(subject.wrapped_exception).to be_nil
+    end
+  end
 
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to eq(exception) }
-      it { expect(subject.message).to eq('the server responded with status  - method and url are not available due to include_request: false on Faraday::Response::RaiseError middleware') }
+  describe ".new with Exception" do
+    let(original) { RuntimeError.new("original message") }
+    subject { Faraday::Error.new(original) }
+
+    it "wraps the exception" do
+      expect(subject.wrapped_exception).to eq(original)
     end
 
-    context 'with hash with status but missing request data' do
-      let(:exception) { { status: 404, body: 'not found' } } # missing request key
-
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to eq(exception) }
-      it { expect(subject.message).to eq('the server responded with status 404 - method and url are not available due to include_request: false on Faraday::Response::RaiseError middleware') }
+    it "uses the exception message" do
+      expect(subject.message).to eq("original message")
     end
 
-    context 'with hash with status and request but missing method in request' do
-      let(:exception) { { status: 404, body: 'not found', request: { url: 'http://example.com/test' } } } # missing method
+    it "has no response" do
+      expect(subject.response).to be_nil
+    end
+  end
 
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to eq(exception) }
-      it { expect(subject.message).to eq('the server responded with status 404 for  http://example.com/test') }
+  describe "Hash-based constructor" do
+    pending "Ruby Faraday::Error.new(hash) is not supported in Crystal" do
+      # Ruby: Faraday::Error.new({ status: 400, body: 'error' })
+      # Crystal: only String or Exception constructors
+    end
+  end
+
+  describe "error hierarchy — ClientError subclasses" do
+    it "ClientError is a Faraday::Error" do
+      expect(Faraday::ClientError.new).to be_a(Faraday::Error)
     end
 
-    context 'with hash with status and request but missing url in request' do
-      let(:exception) { { status: 404, body: 'not found', request: { method: :get } } } # missing url
-
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to eq(exception) }
-      it { expect(subject.message).to eq('the server responded with status 404 for GET ') }
+    it "BadRequestError is a ClientError" do
+      expect(Faraday::BadRequestError.new).to be_a(Faraday::ClientError)
     end
 
-    context 'with properly formed Faraday::Env' do
-      # This represents the normal case - a well-formed Faraday::Env object
-      # with all the standard properties populated as they would be during
-      # a typical HTTP request/response cycle
-      let(:exception) { Faraday::Env.new }
-
-      before do
-        exception.status = 500
-        exception.method = :post
-        exception.url = URI('https://api.example.com/users')
-        exception.request = Faraday::RequestOptions.new
-        exception.response_headers = { 'content-type' => 'application/json' }
-        exception.response_body = '{"error": "Internal server error"}'
-        exception.request_headers = { 'authorization' => 'Bearer token123' }
-        exception.request_body = '{"name": "John"}'
-      end
-
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to eq(exception) }
-      it { expect(subject.message).to eq('the server responded with status 500 for POST https://api.example.com/users') }
+    it "UnauthorizedError is a ClientError" do
+      expect(Faraday::UnauthorizedError.new).to be_a(Faraday::ClientError)
     end
 
-    context 'with Faraday::Env missing status key' do
-      let(:exception) { Faraday::Env.new }
-
-      before do
-        exception[:body] = 'error body'
-        # Intentionally not setting status
-      end
-
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to eq(exception) }
-      it { expect(subject.message).to eq('the server responded with status  for  ') }
+    it "ForbiddenError is a ClientError" do
+      expect(Faraday::ForbiddenError.new).to be_a(Faraday::ClientError)
     end
 
-    context 'with Faraday::Env with direct method and url properties' do
-      let(:exception) { Faraday::Env.new }
+    it "ResourceNotFound is a ClientError" do
+      expect(Faraday::ResourceNotFound.new).to be_a(Faraday::ClientError)
+    end
 
-      before do
-        exception.status = 404
-        exception.method = :get
-        exception.url = URI('http://example.com/test')
-        exception[:body] = 'not found'
-      end
+    it "ProxyAuthError is a ClientError" do
+      expect(Faraday::ProxyAuthError.new).to be_a(Faraday::ClientError)
+    end
 
-      it { expect(subject.wrapped_exception).to be_nil }
-      it { expect(subject.response).to eq(exception) }
-      it { expect(subject.message).to eq('the server responded with status 404 for GET http://example.com/test') }
+    it "RequestTimeoutError is a ClientError" do
+      expect(Faraday::RequestTimeoutError.new).to be_a(Faraday::ClientError)
+    end
+
+    it "ConflictError is a ClientError" do
+      expect(Faraday::ConflictError.new).to be_a(Faraday::ClientError)
+    end
+
+    it "UnprocessableContentError is a ClientError" do
+      expect(Faraday::UnprocessableContentError.new).to be_a(Faraday::ClientError)
+    end
+
+    it "UnprocessableEntityError is an alias for UnprocessableContentError" do
+      expect(Faraday::UnprocessableEntityError.new).to be_a(Faraday::UnprocessableContentError)
+    end
+
+    it "TooManyRequestsError is a ClientError" do
+      expect(Faraday::TooManyRequestsError.new).to be_a(Faraday::ClientError)
+    end
+  end
+
+  describe "error hierarchy — ServerError subclasses" do
+    it "ServerError is a Faraday::Error" do
+      expect(Faraday::ServerError.new).to be_a(Faraday::Error)
+    end
+
+    it "TimeoutError is a ServerError" do
+      expect(Faraday::TimeoutError.new).to be_a(Faraday::ServerError)
+    end
+
+    it "NilStatusError is a ServerError" do
+      expect(Faraday::NilStatusError.new).to be_a(Faraday::ServerError)
+    end
+  end
+
+  describe "error hierarchy — standalone errors" do
+    it "ConnectionFailed is a Faraday::Error" do
+      expect(Faraday::ConnectionFailed.new).to be_a(Faraday::Error)
+    end
+
+    it "SSLError is a Faraday::Error" do
+      expect(Faraday::SSLError.new).to be_a(Faraday::Error)
+    end
+
+    it "ParsingError is a Faraday::Error" do
+      expect(Faraday::ParsingError.new).to be_a(Faraday::Error)
+    end
+
+    it "InitializationError is a Faraday::Error" do
+      expect(Faraday::InitializationError.new).to be_a(Faraday::Error)
+    end
+  end
+
+  describe "is_a? Exception" do
+    it "Faraday::Error is an Exception" do
+      expect(Faraday::Error.new("msg")).to be_a(Exception)
     end
   end
 end

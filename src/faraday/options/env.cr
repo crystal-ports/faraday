@@ -1,204 +1,76 @@
-# frozen_string_literal: true
-
 module Faraday
-  # @!parse
-  #   # @!attribute method
-  #   #   @return [Symbol] HTTP method (`:get`, `:post`)
-  #   #
-  #   # @!attribute body
-  #   #   @return [String] The request body that will eventually be converted to a
-  #   #   string.
-  #   #
-  #   # @!attribute url
-  #   #   @return [URI] URI instance for the current request.
-  #   #
-  #   # @!attribute request
-  #   #   @return [Hash] options for configuring the request.
-  #   #   Options for configuring the request.
-  #   #
-  #   #   - `:timeout`       - time limit for the entire request (Integer in
-  #   #                        seconds)
-  #   #   - `:open_timeout`  - time limit for just the connection phase (e.g.
-  #   #                        handshake) (Integer in seconds)
-  #   #   - `:read_timeout`  - time limit for the first response byte received from
-  #   #                        the server (Integer in seconds)
-  #   #   - `:write_timeout` - time limit for the client to send the request to the
-  #   #                        server (Integer in seconds)
-  #   #   - `:on_data`       - Proc for streaming
-  #   #   - `:proxy`         - Hash of proxy options
-  #   #       - `:uri`         - Proxy server URI
-  #   #       - `:user`        - Proxy server username
-  #   #       - `:password`    - Proxy server password
-  #   #
-  #   # @!attribute request_headers
-  #   #   @return [Hash] HTTP Headers to be sent to the server.
-  #   #
-  #   # @!attribute ssl
-  #   #   @return [Hash] options for configuring SSL requests
-  #   #
-  #   # @!attribute parallel_manager
-  #   #   @return [Object] sent if the connection is in parallel mode
-  #   #
-  #   # @!attribute params
-  #   #   @return [Hash]
-  #   #
-  #   # @!attribute response
-  #   #   @return [Response]
-  #   #
-  #   # @!attribute response_headers
-  #   #   @return [Hash] HTTP headers from the server
-  #   #
-  #   # @!attribute status
-  #   #   @return [Integer] HTTP response status code
-  #   #
-  #   # @!attribute reason_phrase
-  #   #   @return [String]
-  #   class Env < Options; end
-  Env = Options.new(:method, :request_body, :url, :request,
-                    :request_headers, :ssl, :parallel_manager, :params,
-                    :response, :response_headers, :status,
-                    :reason_phrase, :response_body) do
-    const_set(:ContentLength, 'Content-Length')
-    const_set(:StatusesWithoutBody, Set.new([204, 304]))
-    const_set(:SuccessfulStatuses, 200..299)
+  # Env is the request/response environment passed through the middleware stack.
+  class Env
+    CONTENT_LENGTH        = "Content-Length"
+    STATUSES_WITHOUT_BODY = Set{204, 304}
+    SUCCESSFUL_STATUSES   = 200..299
+    METHODS_WITH_BODIES   = Set{:post, :put, :patch}
 
-    # A Set of HTTP verbs that typically send a body.  If no body is set for
-    # these requests, the Content-Length header is set to 0.
-    const_set(:MethodsWithBodies, Set.new(Faraday::METHODS_WITH_BODY.map(&:to_sym)))
+    property method : Symbol
+    property request_body : JSON::Any | String | Nil
+    property url : URI?
+    property request : RequestOptions
+    property request_headers : HTTP::Headers
+    property ssl : SSLOptions
+    property parallel_manager : Nil
+    property params : Utils::ParamsHash
+    property response : Response?
+    property response_headers : HTTP::Headers?
+    property status : Int32?
+    property reason_phrase : String?
+    property response_body : String?
+    property custom_members : Hash(Symbol, String)
 
-    options request: RequestOptions,
-            request_headers: Utils::Headers, response_headers: Utils::Headers
-
-    extend Forwardable
-
-    def_delegators :request, :params_encoder
-
-    # Build a new Env from given value. Respects and updates `custom_members`.
-    #
-    # @param value [Object] a value fitting Option.from(v).
-    # @return [Env] from given value
-    def self.from(value)
-      env = super
-      if value.respond_to?(:custom_members)
-        env.custom_members.update(value.custom_members)
-      end
-      env
+    def initialize(
+      @method : Symbol = :get,
+      @request_body : JSON::Any | String | Nil = nil,
+      @url : URI? = nil,
+      @request : RequestOptions = RequestOptions.new,
+      @request_headers : HTTP::Headers = HTTP::Headers.new,
+      @ssl : SSLOptions = SSLOptions.new,
+      @parallel_manager = nil,
+      @params : Utils::ParamsHash = Utils::ParamsHash.new
+    )
+      @custom_members = {} of Symbol => String
     end
 
-    # @param key [Object]
-    def [](key)
-      return self[current_body] if key == :body
+    def body : JSON::Any | String | Nil
+      @status ? @response_body : @request_body
+    end
 
-      if in_member_set?(key)
-        super
+    def body=(value : JSON::Any | String | Nil)
+      if @status
+        @response_body = value.is_a?(JSON::Any) ? value.to_json : value
       else
-        custom_members[key]
+        @request_body = value
       end
     end
 
-    # @param key [Object]
-    # @param value [Object]
-    def []=(key, value)
-      if key == :body
-        super(current_body, value)
-        return
-      end
-
-      if in_member_set?(key)
-        super
-      else
-        custom_members[key] = value
-      end
+    def success? : Bool
+      s = @status
+      s ? SUCCESSFUL_STATUSES.includes?(s) : false
     end
 
-    def current_body
-      !!status ? :response_body : :request_body
+    def needs_body? : Bool
+      !body && METHODS_WITH_BODIES.includes?(@method)
     end
 
-    def body
-      self[:body]
-    end
-
-    def body=(value)
-      self[:body] = value
-    end
-
-    # @return [Boolean] true if status is in the set of {SuccessfulStatuses}.
-    def success?
-      Env::SuccessfulStatuses.include?(status)
-    end
-
-    # @return [Boolean] true if there's no body yet, and the method is in the
-    # set of {Env::MethodsWithBodies}.
-    def needs_body?
-      !body && Env::MethodsWithBodies.include?(method)
-    end
-
-    # Sets content length to zero and the body to the empty string.
     def clear_body
-      request_headers[Env::ContentLength] = '0'
-      self.body = +''
+      @request_headers[CONTENT_LENGTH] = "0"
+      @request_body = ""
     end
 
-    # @return [Boolean] true if the status isn't in the set of
-    # {Env::StatusesWithoutBody}.
-    def parse_body?
-      !Env::StatusesWithoutBody.include?(status)
+    def parse_body? : Bool
+      s = @status
+      s ? !STATUSES_WITHOUT_BODY.includes?(s) : true
     end
 
-    # @return [Boolean] true if there is a parallel_manager
-    def parallel?
-      !!parallel_manager
+    def parallel? : Bool
+      false
     end
 
-    def inspect
-      attrs = [nil]
-      members.each do |mem|
-        if (value = send(mem))
-          attrs << "@#{mem}=#{value.inspect}"
-        end
-      end
-      attrs << "@custom=#{custom_members.inspect}" unless custom_members.empty?
-      %(#<#{self.class}#{attrs.join(' ')}>)
-    end
-
-    def stream_response?
-      request.stream_response?
-    end
-
-    def stream_response(&block)
-      size = 0
-      yielded = false
-      block_result = block.call do |chunk|
-        if chunk.bytesize.positive? || size.positive?
-          yielded = true
-          size += chunk.bytesize
-          request.on_data.call(chunk, size, self)
-        end
-      end
-      request.on_data.call(+'', 0, self) unless yielded
-      block_result
-    end
-
-    # @private
-    def custom_members
-      @custom_members ||= {}
-    end
-
-    # @private
-    if members.first.is_a?(Symbol)
-      def in_member_set?(key)
-        self.class.member_set.include?(key.to_sym)
-      end
-    else
-      def in_member_set?(key)
-        self.class.member_set.include?(key.to_s)
-      end
-    end
-
-    # @private
-    def self.member_set
-      @member_set ||= Set.new(members)
+    def stream_response? : Bool
+      @request.stream_response?
     end
   end
 end

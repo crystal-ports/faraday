@@ -1,95 +1,74 @@
-# frozen_string_literal: true
-
-require 'forwardable'
-
 module Faraday
-  # Response represents an HTTP response from making an HTTP request.
+  # Response wraps a finished HTTP response from the middleware stack.
   class Response
-    extend Forwardable
-    extend MiddlewareRegistry
+    getter env : Env?
 
-    def initialize(env = nil)
-      @env = Env.from(env) if env
-      @on_complete_callbacks = []
+    def initialize
+      @env = nil
+      @on_complete_callbacks = [] of Env ->
     end
 
-    attr_reader :env
-
-    def status
-      finished? ? env.status : nil
+    def initialize(env : Env)
+      @env = env
+      @on_complete_callbacks = [] of Env ->
     end
 
-    def reason_phrase
-      finished? ? env.reason_phrase : nil
+    # Convenience constructor used by adapter.
+    def initialize(status : Int32, body : String?, headers : HTTP::Headers)
+      env = Env.new
+      env.status = status
+      env.response_body = body
+      env.response_headers = headers
+      @env = env
+      @on_complete_callbacks = [] of Env ->
     end
 
-    def headers
-      finished? ? env.response_headers : {}
+    def status : Int32?
+      @env.try(&.status)
     end
 
-    def_delegator :headers, :[]
-
-    def body
-      finished? ? env.body : nil
+    def reason_phrase : String?
+      @env.try(&.reason_phrase)
     end
 
-    def url
-      finished? ? env.url : nil
+    def headers : HTTP::Headers
+      @env.try(&.response_headers) || HTTP::Headers.new
     end
 
-    def finished?
-      !!env
+    def body : String?
+      @env.try(&.response_body)
     end
 
-    def on_complete(&block)
+    def url : URI?
+      @env.try(&.url)
+    end
+
+    def finished? : Bool
+      !@env.nil?
+    end
+
+    def success? : Bool
+      finished? && @env.not_nil!.success?
+    end
+
+    def on_complete(&block : Env ->)
       if finished?
-        yield(env)
+        block.call(@env.not_nil!)
       else
         @on_complete_callbacks << block
       end
       self
     end
 
-    def finish(env)
-      raise 'response already finished' if finished?
-
-      @env = env.is_a?(Env) ? env : Env.from(env)
-      @on_complete_callbacks.each { |callback| callback.call(@env) }
+    def finish(env : Env)
+      raise RuntimeError.new("response already finished") if finished?
+      @env = env
+      @on_complete_callbacks.each { |cb| cb.call(env) }
       self
     end
 
-    def success?
-      finished? && env.success?
-    end
-
-    def to_hash
-      {
-        status: status, body: body,
-        response_headers: headers,
-        url: url
-      }
-    end
-
-    # because @on_complete_callbacks cannot be marshalled
-    def marshal_dump
-      finished? ? to_hash : nil
-    end
-
-    def marshal_load(env)
-      @env = Env.from(env)
-    end
-
-    # Expand the env with more properties, without overriding existing ones.
-    # Useful for applying request params after restoring a marshalled Response.
-    def apply_request(request_env)
-      raise "response didn't finish yet" unless finished?
-
-      @env = Env.from(request_env).update(@env)
-      self
+    def [](key : String) : String
+      headers[key]
     end
   end
 end
-
-require 'faraday/response/json'
-require 'faraday/response/logger'
-require 'faraday/response/raise_error'

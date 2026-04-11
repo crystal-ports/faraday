@@ -1,199 +1,67 @@
-# frozen_string_literal: true
+require "../../spec_helper"
 
-RSpec.describe Faraday::Request::Json do
-  let(:middleware) { described_class.new(->(env) { Faraday::Response.new(env) }) }
+# Faraday::Request::Json — encodes the request body as JSON and sets Content-Type.
 
-  def process(body, content_type = nil)
-    env = { body: body, request_headers: Faraday::Utils::Headers.new }
-    env[:request_headers]['content-type'] = content_type if content_type
-    middleware.call(Faraday::Env.from(env)).env
+Spectator.describe Faraday::Request::Json do
+  let(stubs) {
+    Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.post("/json") { |env|
+        {200, {"X-Request-CT" => env.request_headers["Content-Type"]?.to_s}, env.request_body.to_s}
+      }
+      stub.post("/passthrough", "already a string") { {200, {} of String => String, "ok"} }
+    end
+  }
+
+  let(conn) {
+    Faraday::Connection.new("http://example.com") do |b|
+      b.request :json
+      b.adapter :test, stubs
+    end
+  }
+
+  it "encodes a Hash body as JSON" do
+    response = conn.post("/json", {"key" => "value"})
+    expect(response.body.to_s).to contain("\"key\"")
+    expect(response.body.to_s).to contain("\"value\"")
   end
 
-  def result_body
-    result[:body]
+  it "sets Content-Type to application/json" do
+    response = conn.post("/json", {"a" => "1"})
+    expect(response.headers["X-Request-CT"]).to contain("application/json")
   end
 
-  def result_type
-    result[:request_headers]['content-type']
+  it "does not double-encode an already-String body" do
+    response = conn.post("/passthrough", "already a string")
+    expect(response.status).to eq(200)
   end
 
-  context 'no body' do
-    let(:result) { process(nil) }
-
-    it "doesn't change body" do
-      expect(result_body).to be_nil
-    end
-
-    it "doesn't add content type" do
-      expect(result_type).to be_nil
-    end
-  end
-
-  context 'empty body' do
-    let(:result) { process('') }
-
-    it "doesn't change body" do
-      expect(result_body).to be_empty
-    end
-
-    it "doesn't add content type" do
-      expect(result_type).to be_nil
-    end
-  end
-
-  context 'string body' do
-    let(:result) { process('{"a":1}') }
-
-    it "doesn't change body" do
-      expect(result_body).to eq('{"a":1}')
-    end
-
-    it 'adds content type' do
-      expect(result_type).to eq('application/json')
-    end
-  end
-
-  context 'object body' do
-    let(:result) { process(a: 1) }
-
-    it 'encodes body' do
-      expect(result_body).to eq('{"a":1}')
-    end
-
-    it 'adds content type' do
-      expect(result_type).to eq('application/json')
-    end
-  end
-
-  context 'empty object body' do
-    let(:result) { process({}) }
-
-    it 'encodes body' do
-      expect(result_body).to eq('{}')
-    end
-  end
-
-  context 'true body' do
-    let(:result) { process(true) }
-
-    it 'encodes body' do
-      expect(result_body).to eq('true')
-    end
-
-    it 'adds content type' do
-      expect(result_type).to eq('application/json')
-    end
-  end
-
-  context 'false body' do
-    let(:result) { process(false) }
-
-    it 'encodes body' do
-      expect(result_body).to eq('false')
-    end
-
-    it 'adds content type' do
-      expect(result_type).to eq('application/json')
-    end
-  end
-
-  context 'object body with json type' do
-    let(:result) { process({ a: 1 }, 'application/json; charset=utf-8') }
-
-    it 'encodes body' do
-      expect(result_body).to eq('{"a":1}')
-    end
-
-    it "doesn't change content type" do
-      expect(result_type).to eq('application/json; charset=utf-8')
-    end
-  end
-
-  context 'object body with vendor json type' do
-    let(:result) { process({ a: 1 }, 'application/vnd.myapp.v1+json; charset=utf-8') }
-
-    it 'encodes body' do
-      expect(result_body).to eq('{"a":1}')
-    end
-
-    it "doesn't change content type" do
-      expect(result_type).to eq('application/vnd.myapp.v1+json; charset=utf-8')
-    end
-  end
-
-  context 'object body with incompatible type' do
-    let(:result) { process({ a: 1 }, 'application/xml; charset=utf-8') }
-
-    it "doesn't change body" do
-      expect(result_body).to eq(a: 1)
-    end
-
-    it "doesn't change content type" do
-      expect(result_type).to eq('application/xml; charset=utf-8')
-    end
-  end
-
-  context 'with encoder' do
-    let(:encoder) do
-      double('Encoder').tap do |e|
-        allow(e).to receive(:dump) { |s, opts| JSON.generate(s, opts) }
+  describe "JSON encoding of various types" do
+    let(echo_stubs) {
+      Faraday::Adapter::Test::Stubs.new do |stub|
+        stub.post("/echo") { |env| {200, {} of String => String, env.request_body.to_s} }
       end
+    }
+
+    let(json_conn) {
+      Faraday::Connection.new("http://example.com") do |b|
+        b.request :json
+        b.adapter :test, echo_stubs
+      end
+    }
+
+    it "encodes arrays" do
+      response = json_conn.post("/echo", [1, 2, 3])
+      expect(response.body.to_s).to contain("[")
     end
 
-    let(:result) { process(a: 1) }
-
-    context 'when encoder is passed as object' do
-      let(:middleware) { described_class.new(->(env) { Faraday::Response.new(env) }, { encoder: encoder }) }
-
-      it 'calls specified JSON encoder\'s dump method' do
-        expect(encoder).to receive(:dump).with({ a: 1 })
-
-        result
-      end
-
-      it 'encodes body' do
-        expect(result_body).to eq('{"a":1}')
-      end
-
-      it 'adds content type' do
-        expect(result_type).to eq('application/json')
-      end
+    it "encodes nested structures" do
+      response = json_conn.post("/echo", {"a" => {"b" => "c"}})
+      expect(response.body.to_s).to contain("\"a\"")
     end
+  end
 
-    context 'when encoder is passed as an object-method pair' do
-      let(:middleware) { described_class.new(->(env) { Faraday::Response.new(env) }, { encoder: [encoder, :dump] }) }
-
-      it 'calls specified JSON encoder' do
-        expect(encoder).to receive(:dump).with({ a: 1 })
-
-        result
-      end
-
-      it 'encodes body' do
-        expect(result_body).to eq('{"a":1}')
-      end
-
-      it 'adds content type' do
-        expect(result_type).to eq('application/json')
-      end
-    end
-
-    context 'when encoder is not passed' do
-      let(:middleware) { described_class.new(->(env) { Faraday::Response.new(env) }) }
-
-      it 'calls JSON.generate' do
-        expect(JSON).to receive(:generate).with({ a: 1 })
-
-        result
-      end
-
-      it 'encodes body' do
-        expect(result_body).to eq('{"a":1}')
-      end
-
-      it 'adds content type' do
-        expect(result_type).to eq('application/json')
-      end
+  describe "Accept header" do
+    pending "Request::Json may also set Accept: application/json" do
     end
   end
 end

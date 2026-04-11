@@ -1,72 +1,33 @@
-# frozen_string_literal: true
-
-require 'monitor'
-
 module Faraday
-  # Middleware is the basic base class of any Faraday middleware.
-  class Middleware
+  # Middleware is the base class for all Faraday middleware.
+  # Subclasses override on_request and/or on_complete for their behavior.
+  class Middleware < Handler
     extend MiddlewareRegistry
 
-    attr_reader :app, :options
+    @@lock = Mutex.new
 
-    DEFAULT_OPTIONS = {}.freeze
-    LOCK = Mutex.new
+    getter app : Handler
 
-    def initialize(app = nil, options = {})
-      @app = app
-      @options = self.class.default_options.merge(options)
+    def initialize(@app : Handler)
     end
 
-    class << self
-      # Faraday::Middleware::default_options= allows user to set default options at the Faraday::Middleware
-      # class level.
-      #
-      # @example Set the Faraday::Response::RaiseError option, `include_request` to `false`
-      # my_app/config/initializers/my_faraday_middleware.rb
-      #
-      # Faraday::Response::RaiseError.default_options = { include_request: false }
-      #
-      def default_options=(options = {})
-        validate_default_options(options)
-        LOCK.synchronize do
-          @default_options = default_options.merge(options)
-        end
-      end
-
-      # default_options attr_reader that initializes class instance variable
-      # with the values of any Faraday::Middleware defaults, and merges with
-      # subclass defaults
-      def default_options
-        @default_options ||= DEFAULT_OPTIONS.merge(self::DEFAULT_OPTIONS)
-      end
-
-      private
-
-      def validate_default_options(options)
-        invalid_keys = options.keys.reject { |opt| self::DEFAULT_OPTIONS.key?(opt) }
-        return unless invalid_keys.any?
-
-        raise(Faraday::InitializationError,
-              "Invalid options provided. Keys not found in #{self}::DEFAULT_OPTIONS: #{invalid_keys.join(', ')}")
-      end
-    end
-
-    def call(env)
-      on_request(env) if respond_to?(:on_request)
-      app.call(env).on_complete do |environment|
-        on_complete(environment) if respond_to?(:on_complete)
-      end
-    rescue StandardError => e
-      on_error(e) if respond_to?(:on_error)
-      raise
+    def call(env : Env) : Response
+      on_request(env)
+      response = @app.call(env)
+      response.on_complete { |e| on_complete(e) }
+      response
     end
 
     def close
-      if app.respond_to?(:close)
-        app.close
-      else
-        warn "#{app} does not implement #close!"
-      end
+      @app.close
+    end
+
+    # Override in subclasses to process the request before sending.
+    def on_request(env : Env)
+    end
+
+    # Override in subclasses to process the response after receiving.
+    def on_complete(env : Env)
     end
   end
 end

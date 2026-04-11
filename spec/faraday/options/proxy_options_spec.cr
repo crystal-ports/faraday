@@ -1,79 +1,92 @@
-# frozen_string_literal: true
+require "../../spec_helper"
 
-RSpec.describe Faraday::ProxyOptions do
-  describe '#from' do
-    it 'works with string' do
-      options = Faraday::ProxyOptions.from 'http://user:pass@example.org'
-      expect(options.user).to eq('user')
-      expect(options.password).to eq('pass')
-      expect(options.uri).to be_a_kind_of(URI)
-      expect(options.path).to eq('')
-      expect(options.port).to eq(80)
-      expect(options.host).to eq('example.org')
-      expect(options.scheme).to eq('http')
-      expect(options.inspect).to match('#<Faraday::ProxyOptions uri=')
+Spectator.describe Faraday::ProxyOptions do
+  describe ".from with a string URL" do
+    let(proxy_url) { "http://proxy.example.com:8080" }
+    subject { Faraday::ProxyOptions.from(proxy_url) }
+
+    it "creates a ProxyOptions" do
+      expect(subject).not_to be_nil
     end
 
-    it 'defaults to http' do
-      options = Faraday::ProxyOptions.from 'example.org'
-      expect(options.port).to eq(80)
-      expect(options.host).to eq('example.org')
-      expect(options.scheme).to eq('http')
+    it "parses the host" do
+      expect(subject.not_nil!.uri.not_nil!.host).to eq("proxy.example.com")
     end
 
-    it 'works with nil' do
-      options = Faraday::ProxyOptions.from nil
-      expect(options).to be_a_kind_of(Faraday::ProxyOptions)
-      expect(options.inspect).to eq('#<Faraday::ProxyOptions (empty)>')
-    end
-
-    it 'works with hash' do
-      hash = { user: 'user', password: 'pass', uri: 'http://@example.org' }
-      options = Faraday::ProxyOptions.from(hash)
-      expect(options.user).to eq('user')
-      expect(options.password).to eq('pass')
-      expect(options.uri).to be_a_kind_of(URI)
-      expect(options.path).to eq('')
-      expect(options.port).to eq(80)
-      expect(options.host).to eq('example.org')
-      expect(options.scheme).to eq('http')
-      expect(options.inspect).to match('#<Faraday::ProxyOptions uri=')
-    end
-
-    it 'works with option' do
-      opt_arg = { user: 'user', password: 'pass', uri: 'http://@example.org' }
-      option = Faraday::ConnectionOptions.from(proxy: opt_arg)
-      options = Faraday::ProxyOptions.from(option.proxy)
-      expect(options.user).to eq('user')
-      expect(options.password).to eq('pass')
-      expect(options.uri).to be_a_kind_of(URI)
-      expect(options.path).to eq('')
-      expect(options.port).to eq(80)
-      expect(options.host).to eq('example.org')
-      expect(options.scheme).to eq('http')
-      expect(options.inspect).to match('#<Faraday::ProxyOptions uri=')
-    end
-
-    it 'works with no auth' do
-      proxy = Faraday::ProxyOptions.from 'http://example.org'
-      expect(proxy.user).to be_nil
-      expect(proxy.password).to be_nil
-    end
-
-    it 'treats empty string as nil' do
-      proxy = nil
-      proxy_string = proxy.to_s # => empty string
-      options = Faraday::ProxyOptions.from proxy_string
-      expect(options).to be_a_kind_of(Faraday::ProxyOptions)
-      expect(options.inspect).to eq('#<Faraday::ProxyOptions (empty)>')
+    it "parses the port" do
+      expect(subject.not_nil!.uri.not_nil!.port).to eq(8080)
     end
   end
 
-  it 'allows hash access' do
-    proxy = Faraday::ProxyOptions.from 'http://a%40b:pw%20d@example.org'
-    expect(proxy.user).to eq('a@b')
-    expect(proxy[:user]).to eq('a@b')
-    expect(proxy.password).to eq('pw d')
-    expect(proxy[:password]).to eq('pw d')
+  describe ".from with credentials in URL" do
+    let(proxy_url) { "http://user:pass@proxy.example.com:80" }
+    subject { Faraday::ProxyOptions.from(proxy_url) }
+
+    it "extracts the user" do
+      expect(subject.not_nil!.user).to eq("user")
+    end
+
+    it "extracts the password" do
+      expect(subject.not_nil!.password).to eq("pass")
+    end
+
+    it "parses the host" do
+      expect(subject.not_nil!.uri.not_nil!.host).to eq("proxy.example.com")
+    end
+  end
+
+  describe ".from with nil" do
+    it "returns nil" do
+      expect(Faraday::ProxyOptions.from(nil)).to be_nil
+    end
+  end
+
+  describe ".from with URI" do
+    let(proxy_uri) { URI.parse("http://proxy.example.com:3128") }
+    subject { Faraday::ProxyOptions.from(proxy_uri) }
+
+    it "creates a ProxyOptions" do
+      expect(subject).not_to be_nil
+    end
+
+    it "has the correct host" do
+      expect(subject.not_nil!.uri.not_nil!.host).to eq("proxy.example.com")
+    end
+
+    it "has the correct port" do
+      expect(subject.not_nil!.uri.not_nil!.port).to eq(3128)
+    end
+  end
+
+  describe "properties" do
+    subject { Faraday::ProxyOptions.new }
+
+    it "user defaults to nil" do
+      expect(subject.user).to be_nil
+    end
+
+    it "password defaults to nil" do
+      expect(subject.password).to be_nil
+    end
+
+    it "uri defaults to nil" do
+      expect(subject.uri).to be_nil
+    end
+
+    it "allows setting user" do
+      subject.user = "myuser"
+      expect(subject.user).to eq("myuser")
+    end
+
+    it "allows setting password" do
+      subject.password = "mypass"
+      expect(subject.password).to eq("mypass")
+    end
+  end
+
+  describe ".from with Hash" do
+    pending "ProxyOptions.from(Hash) may not be ported to Crystal" do
+      # Ruby: Faraday::ProxyOptions.from(uri: 'http://proxy.com', user: 'u', password: 'p')
+    end
   end
 end

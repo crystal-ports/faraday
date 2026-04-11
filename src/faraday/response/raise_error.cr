@@ -1,83 +1,51 @@
-# frozen_string_literal: true
-
 module Faraday
   class Response
-    # RaiseError is a Faraday middleware that raises exceptions on common HTTP
-    # client or server error responses.
-    class RaiseError < Middleware
-      # rubocop:disable Naming/ConstantName
-      ClientErrorStatuses = (400...500)
-      ServerErrorStatuses = (500...600)
-      ClientErrorStatusesWithCustomExceptions = {
-        400 => Faraday::BadRequestError,
-        401 => Faraday::UnauthorizedError,
-        403 => Faraday::ForbiddenError,
-        404 => Faraday::ResourceNotFound,
-        408 => Faraday::RequestTimeoutError,
-        409 => Faraday::ConflictError,
-        422 => Faraday::UnprocessableContentError,
-        429 => Faraday::TooManyRequestsError
-      }.freeze
-      # rubocop:enable Naming/ConstantName
+    # Middleware that raises exceptions for 4xx/5xx HTTP responses.
+    class RaiseError < Faraday::Middleware
+      def initialize(@app : Handler, @allowed_statuses : Array(Int32) = [] of Int32)
+      end
 
-      DEFAULT_OPTIONS = { include_request: true, allowed_statuses: [] }.freeze
-
-      def on_complete(env)
-        return if Array(options[:allowed_statuses]).include?(env[:status])
-
-        case env[:status]
-        when *ClientErrorStatusesWithCustomExceptions.keys
-          raise ClientErrorStatusesWithCustomExceptions[env[:status]], response_values(env)
+      def on_complete(env : Env)
+        status = env.status || 0
+        return if @allowed_statuses.includes?(status)
+        case status
+        when 400
+          raise Faraday::BadRequestError.new(build_message(env), response_for(env))
+        when 401
+          raise Faraday::UnauthorizedError.new(build_message(env), response_for(env))
+        when 403
+          raise Faraday::ForbiddenError.new(build_message(env), response_for(env))
+        when 404
+          raise Faraday::ResourceNotFound.new(build_message(env), response_for(env))
         when 407
-          # mimic the behavior that we get with proxy requests with HTTPS
-          msg = %(407 "Proxy Authentication Required")
-          raise Faraday::ProxyAuthError.new(msg, response_values(env))
-        when ClientErrorStatuses
-          raise Faraday::ClientError, response_values(env)
-        when ServerErrorStatuses
-          raise Faraday::ServerError, response_values(env)
-        when nil
-          raise Faraday::NilStatusError, response_values(env)
+          raise Faraday::ProxyAuthError.new(build_message(env), response_for(env))
+        when 408
+          raise Faraday::RequestTimeoutError.new(build_message(env), response_for(env))
+        when 409
+          raise Faraday::ConflictError.new(build_message(env), response_for(env))
+        when 422
+          raise Faraday::UnprocessableContentError.new(build_message(env), response_for(env))
+        when 429
+          raise Faraday::TooManyRequestsError.new(build_message(env), response_for(env))
+        when 400..499
+          raise Faraday::ClientError.new(build_message(env), response_for(env))
+        when 500..599
+          raise Faraday::ServerError.new(build_message(env), response_for(env))
+        when 0
+          raise Faraday::NilStatusError.new
         end
       end
 
-      # Returns a hash of response data with the following keys:
-      #   - status
-      #   - headers
-      #   - body
-      #   - request
-      #
-      # The `request` key is omitted when the middleware is explicitly
-      # configured with the option `include_request: false`.
-      def response_values(env)
-        response = {
-          status: env.status,
-          headers: env.response_headers,
-          body: env.body
-        }
-
-        # Include the request data by default. If the middleware was explicitly
-        # configured to _not_ include request data, then omit it.
-        return response unless options[:include_request]
-
-        response.merge(
-          request: {
-            method: env.method,
-            url: env.url,
-            url_path: env.url.path,
-            params: query_params(env),
-            headers: env.request_headers,
-            body: env.request_body
-          }
-        )
+      private def response_for(env : Env) : Response
+        r = Response.new
+        r.finish(env)
+        r
       end
 
-      def query_params(env)
-        env.request.params_encoder ||= Faraday::Utils.default_params_encoder
-        env.params_encoder.decode(env.url.query)
+      private def build_message(env : Env) : String
+        "the server responded with status #{env.status}"
       end
     end
   end
 end
 
-Faraday::Response.register_middleware(raise_error: Faraday::Response::RaiseError)

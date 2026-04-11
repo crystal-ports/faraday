@@ -29,3 +29,9 @@ node_modules
 
 ## AI Planning
 .ai/PLAN.md
+
+## CRYSTAL
+lib/
+.shards.info
+shard.lock
+.spectator-failures

@@ -1,110 +1,72 @@
-# frozen_string_literal: true
+require "../spec_helper"
 
-RSpec.describe Faraday::Request do
-  let(:conn) do
-    Faraday.new(url: 'http://httpbingo.org/api',
-                headers: { 'Mime-Version' => '1.0' },
-                request: { oauth: { consumer_key: 'anonymous' } })
-  end
-  let(:http_method) { :get }
-  let(:block) { nil }
+Spectator.describe Faraday::Request do
+  let(conn) { Faraday::Connection.new("http://httpbin.org/") }
+  subject { conn.build_request(:get) }
 
-  subject { conn.build_request(http_method, &block) }
-
-  context 'when nothing particular is configured' do
-    it { expect(subject.http_method).to eq(:get) }
-    it { expect(subject.to_env(conn).ssl.verify).to be_falsey }
-    it { expect(subject.to_env(conn).ssl.verify_hostname).to be_falsey }
-  end
-
-  context 'when HTTP method is post' do
-    let(:http_method) { :post }
-
-    it { expect(subject.http_method).to eq(:post) }
-  end
-
-  context 'when setting the url on setup with a URI' do
-    let(:block) { proc { |req| req.url URI.parse('foo.json?a=1') } }
-
-    it { expect(subject.path).to eq(URI.parse('foo.json')) }
-    it { expect(subject.params).to eq('a' => '1') }
-    it { expect(subject.to_env(conn).url.to_s).to eq('http://httpbingo.org/api/foo.json?a=1') }
-  end
-
-  context 'when setting the url on setup with a string path and params' do
-    let(:block) { proc { |req| req.url 'foo.json', 'a' => 1 } }
-
-    it { expect(subject.path).to eq('foo.json') }
-    it { expect(subject.params).to eq('a' => 1) }
-    it { expect(subject.to_env(conn).url.to_s).to eq('http://httpbingo.org/api/foo.json?a=1') }
-  end
-
-  context 'when setting the url on setup with a path including params' do
-    let(:block) { proc { |req| req.url 'foo.json?b=2&a=1#qqq' } }
-
-    it { expect(subject.path).to eq('foo.json') }
-    it { expect(subject.params).to eq('a' => '1', 'b' => '2') }
-    it { expect(subject.to_env(conn).url.to_s).to eq('http://httpbingo.org/api/foo.json?a=1&b=2') }
-  end
-
-  context 'when setting a header on setup with []= syntax' do
-    let(:block) { proc { |req| req['Server'] = 'Faraday' } }
-    let(:headers) { subject.to_env(conn).request_headers }
-
-    it { expect(subject.headers['Server']).to eq('Faraday') }
-    it { expect(headers['mime-version']).to eq('1.0') }
-    it { expect(headers['server']).to eq('Faraday') }
-  end
-
-  context 'when setting the body on setup' do
-    let(:block) { proc { |req| req.body = 'hi' } }
-
-    it { expect(subject.body).to eq('hi') }
-    it { expect(subject.to_env(conn).body).to eq('hi') }
-  end
-
-  context 'with global request options set' do
-    let(:env_request) { subject.to_env(conn).request }
-
-    before do
-      conn.options.timeout = 3
-      conn.options.open_timeout = 5
-      conn.ssl.verify = false
-      conn.proxy = 'http://proxy.com'
-    end
-
-    it { expect(subject.options.timeout).to eq(3) }
-    it { expect(subject.options.open_timeout).to eq(5) }
-    it { expect(env_request.timeout).to eq(3) }
-    it { expect(env_request.open_timeout).to eq(5) }
-
-    context 'and per-request options set' do
-      let(:block) do
-        proc do |req|
-          req.options.timeout = 10
-          req.options.boundary = 'boo'
-          req.options.oauth[:consumer_secret] = 'xyz'
-          req.options.context = {
-            foo: 'foo',
-            bar: 'bar'
-          }
-        end
-      end
-
-      it { expect(subject.options.timeout).to eq(10) }
-      it { expect(subject.options.open_timeout).to eq(5) }
-      it { expect(env_request.timeout).to eq(10) }
-      it { expect(env_request.open_timeout).to eq(5) }
-      it { expect(env_request.boundary).to eq('boo') }
-      it { expect(env_request.context).to eq(foo: 'foo', bar: 'bar') }
-      it do
-        oauth_expected = { consumer_secret: 'xyz', consumer_key: 'anonymous' }
-        expect(env_request.oauth).to eq(oauth_expected)
-      end
+  describe "#http_method" do
+    it "is set to :get" do
+      expect(subject.http_method).to eq(:get)
     end
   end
 
-  it 'supports marshal serialization' do
-    expect(Marshal.load(Marshal.dump(subject))).to eq(subject)
+  describe "#path" do
+    it "is a String" do
+      expect(subject.path).to be_a(String)
+    end
+  end
+
+  describe "#headers" do
+    it "is an HTTP::Headers" do
+      expect(subject.headers).to be_a(HTTP::Headers)
+    end
+
+    it "allows getting/setting via []" do
+      subject["X-Test-Header"] = "test-value"
+      expect(subject["X-Test-Header"]).to eq("test-value")
+    end
+  end
+
+  describe "#params" do
+    it "is not nil" do
+      expect(subject.params).not_to be_nil
+    end
+  end
+
+  describe "#body" do
+    it "defaults to nil" do
+      expect(subject.body).to be_nil
+    end
+
+    it "allows setting body" do
+      subject.body = "hello"
+      expect(subject.body).to eq("hello")
+    end
+  end
+
+  describe "#url" do
+    it "sets the path" do
+      subject.url("products")
+      expect(subject.path).to contain("products")
+    end
+
+    it "sets path with extra params" do
+      subject.url("search", {"q" => "crystal"})
+      expect(subject.path).to contain("search")
+    end
+  end
+
+  describe "#options" do
+    it "is a RequestOptions" do
+      expect(subject.options).to be_a(Faraday::RequestOptions)
+    end
+  end
+
+  describe "building a POST request" do
+    subject { conn.build_request(:post) }
+
+    it "has http_method :post" do
+      expect(subject.http_method).to eq(:post)
+    end
   end
 end

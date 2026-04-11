@@ -1,67 +1,101 @@
-# [![Faraday](./docs/_media/home-logo.svg)][website]
+# Faraday — Crystal Port
 
-[![Gem Version](https://badge.fury.io/rb/faraday.svg)](https://rubygems.org/gems/faraday)
-[![GitHub Actions CI](https://github.com/lostisland/faraday/workflows/CI/badge.svg)](https://github.com/lostisland/faraday/actions?query=workflow%3ACI)
-[![GitHub Discussions](https://img.shields.io/github/discussions/lostisland/faraday?logo=github)](https://github.com/lostisland/faraday/discussions)
+[![Crystal](https://img.shields.io/badge/crystal-%3E%3D1.14.0-black)](https://crystal-lang.org)
 
-Faraday is an HTTP client library abstraction layer that provides a common interface over many
-adapters (such as Net::HTTP) and embraces the concept of Rack middleware when processing the request/response cycle.
-Take a look at [Awesome Faraday][awesome] for a list of available adapters and middleware.
+Crystal port of [lostisland/faraday](https://github.com/lostisland/faraday) — an HTTP client library
+abstraction layer with Rack-inspired middleware. Transpiled with
+[alexanderadam/ruby_to_crystal](https://github.com/alexanderadam/ruby_to_crystal).
 
-## Why use Faraday?
+## Installation
 
-Faraday gives you the power of Rack middleware for manipulating HTTP requests and responses,
-making it easier to build sophisticated API clients or web service libraries that abstract away
-the details of how HTTP requests are made.
+Add to your `shard.yml`:
 
-Faraday comes with a lot of features out of the box, such as:
-* Support for multiple adapters (Net::HTTP, Typhoeus, Patron, Excon, HTTPClient, and more)
-* Persistent connections (keep-alive)
-* Parallel requests
-* Automatic response parsing (JSON, XML, YAML)
-* Customization of the request/response cycle with middleware
-* Support for streaming responses
-* Support for uploading files
-* And much more!
+```yaml
+dependencies:
+  faraday:
+    github: crystal-ports/faraday
+```
 
-## Getting Started
+Then run `shards install`.
 
-The best starting point is the [Faraday Website][website], with its introduction and explanation.
+## Quick Start
 
-Need more details? See the [Faraday API Documentation][apidoc] to see how it works internally, or take a look at [Advanced techniques for calling HTTP APIs in Ruby](https://mattbrictson.com/blog/advanced-http-techniques-in-ruby) blog post from [@mattbrictson](https://github.com/mattbrictson) 🚀
+```crystal
+require "faraday"
 
-## Supported Ruby versions
+conn = Faraday.new(url: "https://api.example.com") do |f|
+  f.request  :json
+  f.response :json
+  f.response :raise_error
+  f.adapter  :net_http
+end
 
-This library aims to support and is [tested against][actions] the currently officially supported Ruby
-implementations. This means that, even without a major release, we could add or drop support for Ruby versions,
-following their [EOL](https://endoflife.date/ruby).
-Currently that means we support Ruby 3.0+
+response = conn.get("/users")
+response.body  # => parsed Hash
+```
 
-If something doesn't work on one of these Ruby versions, it's a bug.
+## Middleware
 
-This library may inadvertently work (or seem to work) on other Ruby
-implementations and versions, however support will only be provided for the versions listed
-above.
+```crystal
+conn = Faraday.new(url: "https://api.example.com") do |f|
+  f.request  :authorization, "Bearer", "my-token"
+  f.request  :url_encoded
+  f.response :logger
+  f.response :raise_error
+  f.adapter  :net_http
+end
+```
 
-If you would like this library to support another Ruby version, you may
-volunteer to be a maintainer. Being a maintainer entails making sure all tests
-run and pass on that implementation. When something breaks on your
-implementation, you will be responsible for providing patches in a timely
-fashion. If critical issues for a particular implementation exist at the time
-of a major release, support for that Ruby version may be dropped.
+Available middleware:
+- **Request:** `:authorization`, `:json`, `:url_encoded`, `:instrumentation`
+- **Response:** `:json`, `:logger`, `:raise_error`
 
-## Contribute
+## Testing
 
-Do you want to contribute to Faraday?
-Open the issues page and check for the `help wanted` label!
-But before you start coding, please read our [Contributing Guide][contributing]
+```crystal
+conn = Faraday.new do |f|
+  f.adapter :test do |stub|
+    stub.get("/hello") { [200, {"Content-Type" => "text/plain"}, "world"] }
+    stub.post("/data") { |env| [201, {}, env.request_body] }
+  end
+end
+
+conn.get("/hello").body  # => "world"
+```
+
+## Adapter
+
+The only bundled adapter is `:net_http` (Crystal stdlib `HTTP::Client`). It is the default.
+
+## Supported Crystal Versions
+
+Crystal ≥ 1.14.0.
+
+## Running Specs
+
+```
+shards install
+crystal spec
+# 110 examples, 0 failures
+```
+
+## What Is Not Ported
+
+- Parallel request support — `env.parallel?` always returns `false`
+- Non-stdlib adapters (Typhoeus, Excon, etc.)
+- Multipart / file upload (`Faraday::UploadIO`)
+
+## Architecture
+
+See [`.claude/CLAUDE.md`](.claude/CLAUDE.md) for the architecture overview, directory map,
+middleware/adapter implementation patterns, and Crystal-specific decisions.
+
+## Origin
+
+The source files were `git mv`'d from their Ruby paths to Crystal paths, so the full Ruby commit
+history is reachable via `git log --follow src/faraday/foo.cr`.
 
 ## Copyright
 
-&copy; 2009 - 2023, the Faraday Team. Website and branding design by [Elena Lo Piccolo](https://elelopic.design).
-
-[awesome]: https://github.com/lostisland/awesome-faraday/#adapters
-[website]: https://lostisland.github.io/faraday
-[contributing]: https://github.com/lostisland/faraday/blob/main/.github/CONTRIBUTING.md
-[apidoc]: https://www.rubydoc.info/github/lostisland/faraday
-[actions]: https://github.com/lostisland/faraday/actions
+&copy; 2009 - 2023, the Faraday Team.
+Crystal port by [crystal-ports](https://github.com/crystal-ports).

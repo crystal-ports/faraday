@@ -1,31 +1,59 @@
-# Claude AI Agent Instructions for Faraday
+# Claude AI Agent Instructions for Faraday (Crystal Port)
 
-## About Faraday
-Faraday is a Ruby HTTP client library with a middleware-based architecture (similar to Rack). It provides a common interface over various HTTP adapters and uses middleware for request/response processing.
+## What This Repo Is
+A **Crystal port** of [lostisland/faraday](https://github.com/lostisland/faraday), transpiled via
+[alexanderadam/ruby_to_crystal](https://github.com/alexanderadam/ruby_to_crystal) then hand-cleaned.
+Language: Crystal ≥ 1.14.0. Specs: Spectator (110 examples, 0 failures).
 
-## Primary Directive – IMPORTANT: DO NOT SKIP
-**Before making any code changes or suggestions**, you **must** read and follow the comprehensive guidelines in `.ai/guidelines.md`.
-After you've done so, provide a confirmation message to the user, then proceed with the task at hand.
+## Quick Reference
 
-## Your Responsibilities
-1. **Read** `.ai/guidelines.md` for all Faraday-specific conventions and patterns
-2. **Follow** the established conventions documented there
-3. **Propose updates** to `.ai/guidelines.md` when you identify:
-   - New code patterns not yet documented
-   - Changes to existing conventions
-   - Inconsistencies between guidelines and actual codebase
+| What you want | Where to look |
+|---|---|
+| Coding conventions | `.ai/guidelines.md` |
+| Entry point / load order | `src/faraday.cr` |
+| Middleware stack builder | `src/faraday/rack_builder.cr` |
+| Request/response bag | `src/faraday/options/env.cr` |
+| HTTP adapter (stdlib) | `src/faraday/adapter/net_http.cr` |
+| Test adapter / stubs | `src/faraday/adapter/test.cr` |
+| Handler base types | `src/faraday/handler.cr` |
+| Spec examples (all features) | `spec/faraday_spec.cr` |
+| Error hierarchy | `src/faraday/error.cr` |
 
-## Important Context
-- **New middleware and adapters** should be created as separate gems, NOT added to the base Faraday repository (with rare exceptions for widely-used core middleware)
-- See [faraday-net_http](https://github.com/lostisland/faraday-net_http) as an example adapter in its own repository
-- Focus on Faraday-specific patterns, not generic Ruby/RSpec advice
+## Architecture
 
-## Reference Files
-- **`.ai/guidelines.md`** - Complete Faraday conventions (PRIMARY REFERENCE)
-- `.github/CONTRIBUTING.md` - Contribution process and policies
-- `lib/faraday/middleware.rb` - Middleware base class
-- `lib/faraday/request/json.rb` - Example middleware implementation
+```
+abstract class Handler
+  abstract def call(env : Env) : Response
 
----
+class Middleware < Handler    # wraps the next handler; call @app.call(env) to continue
+class Adapter   < Handler    # terminal — makes the actual HTTP request
+```
 
-**Keep `.ai/guidelines.md` current.** Propose updates when you notice any drift between documentation and reality.
+`RackBuilder` folds `Array(HandlerSpec)` + `AdapterSpec` into a nested handler chain.
+`Faraday::Env` is the request/response bag flowing through every `call`. `Response#finish`
+is synchronous; `on_complete` callbacks fire immediately when the adapter returns.
+
+## Directory Map
+
+```
+src/faraday.cr                   entry point (all requires in load order)
+src/faraday/handler.cr           Handler / HandlerSpec / AdapterSpec base types
+src/faraday/rack_builder.cr      builds the middleware stack
+src/faraday/connection.cr        main user-facing object
+src/faraday/options/env.cr       request/response bag
+src/faraday/adapter/net_http.cr  default adapter (Crystal HTTP::Client)
+src/faraday/adapter/test.cr      in-memory stub adapter
+spec/faraday_spec.cr             110 Spectator examples
+```
+
+## Key Crystal vs Ruby Differences in This Port
+- `Symbol#upcase` doesn't exist → use `sym.to_s.upcase`
+- `HTTP::Client` timeouts require `Time::Span` → use `n.seconds` not bare `n`
+- No `method_missing` → middleware registration uses explicit `HandlerSpec`/`AdapterSpec` wrappers
+- `parallel?` always returns `false` — no parallel request support
+- `Response#finish` is synchronous; `on_complete` callbacks fire immediately
+
+## What Is Not Ported
+- Parallel request support
+- Non-stdlib adapters (Typhoeus, Excon, etc.)
+- Multipart / file upload (`Faraday::UploadIO`)

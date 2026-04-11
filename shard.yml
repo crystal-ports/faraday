@@ -1,0 +1,16 @@
+name: faraday
+version: 2.14.1
+
+description: |
+  Faraday is an HTTP client library abstraction layer that provides a common interface over many adapters.
+
+authors:
+  - lostisland
+
+crystal: ">= 1.14.0"
+
+license: MIT
+
+development_dependencies:
+  spectator:
+    github: icy-arctic-fox/spectator
